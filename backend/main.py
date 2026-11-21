@@ -48,25 +48,23 @@ app = FastAPI(
 )
 
 def _parse_cors_origins() -> list[str]:
-    raw = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000")
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "*")
     origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
     if not origins:
-        origins = ["http://localhost:3000"]
-    # Wildcard origins are not used with credentials enabled.
-    if "*" in origins:
-        logger.warning("Ignoring wildcard CORS origin because credentials are enabled.")
-        origins = [origin for origin in origins if origin != "*"] or ["http://localhost:3000"]
+        return ["*"]
     return origins
 
 
 CORS_ALLOW_ORIGINS = _parse_cors_origins()
+allow_all = "*" in CORS_ALLOW_ORIGINS
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ALLOW_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"] if allow_all else CORS_ALLOW_ORIGINS,
+    allow_credentials=not allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$" if not allow_all else None,
 )
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
