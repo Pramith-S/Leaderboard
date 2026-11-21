@@ -282,6 +282,8 @@ def _import_course_rows(db: Session, course_rows: list[dict]) -> dict:
                 continue
             for completion in db.scalars(select(Completion).where(Completion.lab_id == lab.id)).all():
                 completion.lab_id = replacement.id
+            db.flush()
+            lab.completions = []
         db.delete(lab)
         removed_labs.append({"id": lab.id, "name": lab.name, "url": lab.url, "remapped_completions": comp_count})
 
