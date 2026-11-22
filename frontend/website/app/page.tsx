@@ -22,7 +22,6 @@ export default function Page() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [backgroundError, setBackgroundError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -59,30 +58,6 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
-
-  /** Refresh is a read-only re-fetch; it never triggers a bulk profile scrape. */
-  const refresh = useCallback(async () => {
-    if (refreshing) return;
-    setRefreshing(true);
-    try {
-      const next = await fetchLeaderboardData();
-      setData(next);
-      setError(null);
-      setBackgroundError(null);
-      setFetchedAt(new Date());
-      showToast({ kind: "ok", text: "Leaderboard updated." });
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "Refresh failed.";
-      if (data) {
-        setBackgroundError(message);
-      } else {
-        setError(message);
-      }
-      showToast({ kind: "err", text: message });
-    } finally {
-      setRefreshing(false);
-    }
-  }, [refreshing, showToast, data]);
 
   // Automatic read-only leaderboard refresh every 60 seconds.
   useEffect(() => {
@@ -216,8 +191,6 @@ export default function Page() {
                 onFilter={setFilter}
                 query={query}
                 onQuery={setQuery}
-                onRefresh={refresh}
-                refreshing={refreshing}
                 visible={visible.length}
                 total={all.length}
                 updatedLabel={updatedLabel}

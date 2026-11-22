@@ -1,4 +1,4 @@
-import { RefreshCw, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 
 export type Filter = "10" | "100" | "250" | "all";
 
@@ -14,14 +14,12 @@ interface Props {
   onFilter: (filter: Filter) => void;
   query: string;
   onQuery: (query: string) => void;
-  onRefresh: () => void;
-  refreshing: boolean;
   visible: number;
   total: number;
   updatedLabel?: string;
 }
 
-export default function LeaderboardFilters({ filter, onFilter, query, onQuery, onRefresh, refreshing, visible, total, updatedLabel }: Props) {
+export default function LeaderboardFilters({ filter, onFilter, query, onQuery, visible, total, updatedLabel }: Props) {
   return (
     <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
       <div role="tablist" aria-label="Leaderboard size" className="grid w-full grid-cols-4 rounded-sm border border-line bg-panel p-0.5 lg:w-auto">
@@ -63,16 +61,6 @@ export default function LeaderboardFilters({ filter, onFilter, query, onQuery, o
         <p className="text-sm tabular-nums text-faint" aria-live="polite"><span className="font-semibold text-ink">{visible}</span> of {total}</p>
         {updatedLabel && <p className="text-xs text-faint md:hidden">Updated {updatedLabel}</p>}
       </div>
-
-      <button
-        type="button"
-        onClick={onRefresh}
-        disabled={refreshing}
-        className="on-dark inline-flex h-10 w-full items-center justify-center gap-2 rounded-sm bg-ink px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-accent hover:text-ink disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-ink disabled:hover:text-white lg:w-auto"
-      >
-        <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden />
-        {refreshing ? "Refreshing…" : "Refresh"}
-      </button>
     </div>
   );
 }
