@@ -7,12 +7,31 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 
 logger = logging.getLogger(__name__)
+
+_HTTP_SESSION: requests.Session | None = None
+
+
+def get_http_session() -> requests.Session:
+    global _HTTP_SESSION
+    if _HTTP_SESSION is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=30,
+            pool_maxsize=30,
+            max_retries=Retry(total=2, backoff_factor=0.3),
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _HTTP_SESSION = session
+    return _HTTP_SESSION
 
 BADGE_ID_PATTERN = re.compile(r"/(?:badges|badge)/([A-Za-z0-9_-]+)(?:/|$)", re.IGNORECASE)
 EARNED_PATTERN = re.compile(
@@ -238,7 +257,8 @@ def scrape_badges(
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
             }
-            resp = requests.get(url, headers=headers, timeout=15)
+            session = get_http_session()
+            resp = session.get(url, headers=headers, timeout=15)
             if resp.status_code == 200:
                 candidates = _extract_candidates_bs4(resp.text)
                 badges = _extract_badges_from_candidates(candidates)
