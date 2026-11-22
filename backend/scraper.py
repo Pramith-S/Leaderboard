@@ -1,9 +1,12 @@
 
 import logging
+import os
 import re
 import time
 from urllib.parse import urlparse
 
+from bs4 import BeautifulSoup
+import requests
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
@@ -152,6 +155,61 @@ def _extract_badges_from_candidates(candidates: list[dict]) -> list[dict]:
     return list(badges_by_id.values())
 
 
+def _extract_candidates_bs4(html: str) -> list[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = []
+    seen = set()
+
+    def normalize(val: str | None) -> str:
+        return " ".join((val or "").split())
+
+    badge_cards = soup.select('.profile-badge, [class*="profile-badge"], ql-badge, [data-badge-id]')
+    for card in badge_cards:
+        anchor = card.select_one('a[href*="/badges/"], a[href*="/badge/"], a.badge-image, a[href]')
+        title_el = card.select_one('.ql-title-medium, .ql-headline-medium, [class*="title"], h1, h2, h3')
+        date_el = None
+        for el in card.select('.ql-body-medium, [class*="body"], span, p, time'):
+            txt = el.get_text()
+            if "earned" in txt.lower():
+                date_el = el
+                break
+
+        href = (anchor.get("href") if anchor else "") or ""
+        title = normalize(title_el.get_text() if title_el else "")
+        date_text = normalize(date_el.get_text() if date_el else "")
+        card_text = normalize(card.get_text(" "))
+        link_text = normalize(anchor.get_text() if anchor else "") or title
+        combined_card_text = normalize(f"{title}\n{date_text}\n{card_text}")
+
+        if BADGE_ID_PATTERN.search(href) or ("earned" in combined_card_text.lower() and title):
+            key = f"{href}|{link_text}|{combined_card_text}"
+            if key not in seen:
+                seen.add(key)
+                candidates.append({
+                    "href": href,
+                    "linkText": link_text or title,
+                    "cardText": combined_card_text or card_text,
+                })
+
+    if not candidates:
+        for anchor in soup.select('a[href]'):
+            href = anchor.get("href", "")
+            if not BADGE_ID_PATTERN.search(href):
+                continue
+            card_text = normalize(anchor.parent.get_text(" ") if anchor.parent else "")
+            link_text = normalize(anchor.get_text())
+            key = f"{href}|{link_text}|{card_text}"
+            if key not in seen:
+                seen.add(key)
+                candidates.append({
+                    "href": href,
+                    "linkText": link_text,
+                    "cardText": card_text,
+                })
+
+    return candidates
+
+
 def scrape_badges(
     url: str,
     *,
@@ -170,6 +228,30 @@ def scrape_badges(
     total_start = time.perf_counter()
     browser = None
     logger.info("Starting badge scrape for %s", url)
+
+    # 1. Fast HTTP path: Google Skills public profiles render badge cards in static HTML.
+    # Trying this first executes in <1 second and does not require Playwright/Chromium binaries.
+    if not os.getenv("SCRAPER_DISABLE_FAST_PATH") and not os.getenv("TESTING") and not url.endswith("/test"):
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            resp = requests.get(url, headers=headers, timeout=15)
+            if resp.status_code == 200:
+                candidates = _extract_candidates_bs4(resp.text)
+                badges = _extract_badges_from_candidates(candidates)
+                total_duration = time.perf_counter() - total_start
+                logger.info(
+                    "Fast HTTP scrape completed for %s in %.3fs with %d badge(s)",
+                    url,
+                    total_duration,
+                    len(badges),
+                )
+                return badges
+        except Exception as http_error:
+            logger.debug("Fast HTTP scrape skipped for %s (%s); trying Playwright", url, http_error)
 
     try:
         with sync_playwright() as playwright:

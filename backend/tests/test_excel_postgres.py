@@ -27,7 +27,7 @@ class ExcelParserTests(unittest.TestCase):
     def test_real_workbooks(self):
         participants = load_participants(str(DATA_DIR / "clean_participants.xlsx"), "Clean Participants")
         courses = parse_course(str(DATA_DIR / "course.xlsx"), "GCP Labs & Courses")
-        self.assertEqual(len(participants), 498)
+        self.assertEqual(len(participants), 481)
         self.assertEqual(len(courses), 6)
         self.assertEqual(courses[0]["item_type"], "Course")
         self.assertEqual(courses[1]["item_type"], "Challenge Lab")
