@@ -203,6 +203,47 @@ class SchedulerWorkerTests(unittest.TestCase):
         self.assertEqual(summary["failed"], 1)
         self.assertEqual(summary["badges_extracted"], 2)
 
+    def test_get_status_reports_correct_state(self):
+        scheduler = MagicMock()
+        scheduler.running = True
+        mock_job = MagicMock()
+        mock_job.next_run_time = None
+        scheduler.get_job.return_value = mock_job
+        service = ScrapeSchedulerService(
+            SchedulerConfig(interval_minutes=60, concurrency=5, run_initial_cycle=True),
+            process_user=MagicMock(),
+            session_factory=make_session_factory([]),
+            engine_obj=FakeEngine(),
+            scheduler=scheduler,
+        )
+        status = service.get_status()
+        self.assertTrue(status["scheduler_running"])
+        self.assertFalse(status["cycle_running"])
+        self.assertEqual(status["interval_minutes"], 60)
+        self.assertEqual(status["concurrency"], 5)
+        self.assertTrue(status["run_initial_cycle"])
+        self.assertIsNone(status["current_cycle"])
+
+    def test_trigger_cycle_in_background(self):
+        service = ScrapeSchedulerService(
+            SchedulerConfig(interval_minutes=60, concurrency=2, run_initial_cycle=False),
+            process_user=MagicMock(return_value={"status": "Success"}),
+            session_factory=make_session_factory([]),
+            engine_obj=FakeEngine(),
+            scheduler=MagicMock(),
+        )
+        service.run_cycle = MagicMock(return_value={"status": "completed"})
+        res = service.trigger_cycle_in_background("manual_test")
+        self.assertEqual(res["status"], "triggered")
+
+    def test_main_scheduler_endpoints(self):
+        from backend.main import get_scheduler_status, health_check
+        health = health_check()
+        self.assertEqual(health["status"], "healthy")
+        status = get_scheduler_status()
+        self.assertTrue(status["scheduler_enabled"])
+        self.assertIn("interval_minutes", status)
+
 
 if __name__ == "__main__":
     unittest.main()

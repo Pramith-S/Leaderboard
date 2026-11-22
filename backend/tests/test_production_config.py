@@ -51,14 +51,14 @@ class CorsConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"CORS_ALLOW_ORIGINS": "https://app.example.com, https://admin.example.com"}, clear=False):
             self.assertEqual(main._parse_cors_origins(), ["https://app.example.com", "https://admin.example.com"])
 
-    def test_parse_cors_origins_rejects_wildcard_with_credentials(self):
+    def test_parse_cors_origins_supports_wildcard(self):
         with patch.dict(os.environ, {"CORS_ALLOW_ORIGINS": "*"}, clear=False):
-            self.assertEqual(main._parse_cors_origins(), ["http://localhost:3000"])
+            self.assertEqual(main._parse_cors_origins(), ["*"])
 
-    def test_parse_cors_origins_defaults_to_localhost(self):
+    def test_parse_cors_origins_defaults_to_wildcard(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("CORS_ALLOW_ORIGINS", None)
-            self.assertEqual(main._parse_cors_origins(), ["http://localhost:3000"])
+            self.assertEqual(main._parse_cors_origins(), ["*"])
 
 
 class SchedulerShutdownTests(unittest.TestCase):

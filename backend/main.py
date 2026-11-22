@@ -562,7 +562,14 @@ def root():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "healthy"}
+    enable_scheduler = os.getenv("ENABLE_SCHEDULER", "true").strip().lower() in {"1", "true", "yes", "on"}
+    scheduler_status = None
+    if enable_scheduler and _scheduler_instance is not None:
+        scheduler_status = {
+            "running": bool(_scheduler_instance.scheduler.running),
+            "cycle_running": _scheduler_instance._cycle_running.locked(),
+        }
+    return {"status": "healthy", "scheduler": scheduler_status}
 
 
 @app.post("/api/course/upload")
@@ -659,3 +666,74 @@ def get_top_leaderboard(limit: int):
     with SessionLocal() as db:
         records = _serialize_users(db)
     return get_leaderboard(records, limit)
+
+
+# --- Automatic Background Scraping Scheduler Lifecycle & Endpoints ---
+_scheduler_instance = None
+
+
+def get_scheduler_service():
+    global _scheduler_instance
+    if _scheduler_instance is None:
+        if __package__:
+            from .scheduler import ScrapeSchedulerService, SchedulerConfig
+        else:
+            from scheduler import ScrapeSchedulerService, SchedulerConfig
+        _scheduler_instance = ScrapeSchedulerService(
+            config=SchedulerConfig.from_env(),
+            process_user=_process_user,
+            load_course_rows=_load_course_rows,
+            validate_course_workbook=validate_course_workbook_exists,
+        )
+    return _scheduler_instance
+
+
+@app.on_event("startup")
+def start_scheduler_on_startup():
+    # Allow test runners to opt out via TESTING=1 or ENABLE_SCHEDULER=false
+    if os.getenv("TESTING") or os.getenv("ENABLE_SCHEDULER", "true").strip().lower() not in {"1", "true", "yes", "on"}:
+        logger.info("Automatic scraping scheduler is disabled or test environment detected.")
+        return
+    try:
+        service = get_scheduler_service()
+        service.start()
+        logger.info(
+            "Automatic scraping scheduler started (interval=%d min, run_initial_cycle=%s)",
+            service.config.interval_minutes,
+            service.config.run_initial_cycle,
+        )
+    except Exception as error:
+        logger.exception("Failed to start automatic scraping scheduler on startup: %s", error)
+
+
+@app.on_event("shutdown")
+def stop_scheduler_on_shutdown():
+    global _scheduler_instance
+    if _scheduler_instance is not None:
+        try:
+            logger.info("Shutting down automatic scraping scheduler...")
+            _scheduler_instance.shutdown(wait=False)
+            logger.info("Automatic scraping scheduler shut down.")
+        except Exception as error:
+            logger.exception("Error during scraping scheduler shutdown: %s", error)
+
+
+@app.get("/api/scheduler/status")
+def get_scheduler_status():
+    enable_scheduler = os.getenv("ENABLE_SCHEDULER", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if not enable_scheduler:
+        return {"scheduler_enabled": False, "status": "disabled via ENABLE_SCHEDULER"}
+    service = get_scheduler_service()
+    return {
+        "scheduler_enabled": True,
+        **service.get_status(),
+    }
+
+
+@app.post("/api/scheduler/trigger")
+def trigger_scheduler_cycle():
+    enable_scheduler = os.getenv("ENABLE_SCHEDULER", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if not enable_scheduler:
+        raise HTTPException(status_code=400, detail="Scheduler is disabled via ENABLE_SCHEDULER.")
+    service = get_scheduler_service()
+    return service.trigger_cycle_in_background(trigger="api_trigger")

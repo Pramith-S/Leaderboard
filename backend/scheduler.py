@@ -48,10 +48,9 @@ CYCLE_LOCK_KEY = 731_804_161_2027
 @dataclass(frozen=True)
 class SchedulerConfig:
     interval_minutes: int = 60
-    concurrency: int = 3
-    # Default false to avoid unnecessary full scrapes on every worker restart in production.
-    # Set SCRAPE_RUN_INITIAL=true to run once immediately on startup.
-    run_initial_cycle: bool = False
+    concurrency: int = 5
+    # Default true to run once immediately on startup as required, then repeat hourly.
+    run_initial_cycle: bool = True
     launch_timeout_ms: int = DEFAULT_LAUNCH_TIMEOUT_MS
     navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS
     operation_timeout_ms: int = DEFAULT_OPERATION_TIMEOUT_MS
@@ -61,8 +60,8 @@ class SchedulerConfig:
     def from_env(cls) -> "SchedulerConfig":
         return cls(
             interval_minutes=max(1, int(os.getenv("SCRAPE_INTERVAL_MINUTES", "60"))),
-            concurrency=max(1, int(os.getenv("SCRAPE_CONCURRENCY", "3"))),
-            run_initial_cycle=os.getenv("SCRAPE_RUN_INITIAL", "false").strip().lower()
+            concurrency=max(1, int(os.getenv("SCRAPE_CONCURRENCY", "5"))),
+            run_initial_cycle=os.getenv("SCRAPE_RUN_INITIAL", "true").strip().lower()
             in {"1", "true", "yes", "on"},
             launch_timeout_ms=max(1_000, int(os.getenv("SCRAPE_LAUNCH_TIMEOUT_MS", str(DEFAULT_LAUNCH_TIMEOUT_MS)))),
             navigation_timeout_ms=max(1_000, int(os.getenv("SCRAPE_NAVIGATION_TIMEOUT_MS", str(DEFAULT_NAVIGATION_TIMEOUT_MS)))),
@@ -94,6 +93,9 @@ class ScrapeSchedulerService:
         self._shutdown = threading.Event()
         self._installed_signal_handlers = False
         self._initial_thread: threading.Thread | None = None
+        self.last_cycle_summary: dict | None = None
+        self.current_cycle_started_at: str | None = None
+        self.current_cycle_trigger: str | None = None
 
     def _acquire_worker_lock(self, connection) -> bool:
         """Prevent duplicate scheduler worker instances across processes."""
@@ -125,6 +127,8 @@ class ScrapeSchedulerService:
 
         started_at = datetime.now(timezone.utc)
         start_perf = time.perf_counter()
+        self.current_cycle_started_at = started_at.isoformat()
+        self.current_cycle_trigger = trigger
         logger.info(
             "Scrape cycle started trigger=%s at=%s interval_minutes=%s concurrency=%s",
             trigger,
@@ -199,6 +203,9 @@ class ScrapeSchedulerService:
             ended_at = datetime.now(timezone.utc)
             summary["ended_at"] = ended_at.isoformat()
             summary["duration_seconds"] = round(time.perf_counter() - start_perf, 3)
+            self.last_cycle_summary = dict(summary)
+            self.current_cycle_started_at = None
+            self.current_cycle_trigger = None
             logger.info(
                 "Scrape cycle finished trigger=%s status=%s processed=%s successful=%s failed=%s "
                 "badges_extracted=%s new_completions=%s duration_seconds=%s ended_at=%s",
@@ -213,6 +220,49 @@ class ScrapeSchedulerService:
                 summary["ended_at"],
             )
             self._cycle_running.release()
+
+    def get_status(self) -> dict:
+        next_run_iso = None
+        if self.scheduler.running:
+            try:
+                job = self.scheduler.get_job("hourly_scrape_cycle")
+                if job and getattr(job, "next_run_time", None):
+                    next_run_iso = job.next_run_time.isoformat()
+            except Exception:
+                pass
+        is_locked = self._cycle_running.locked()
+        return {
+            "scheduler_running": bool(self.scheduler.running),
+            "cycle_running": is_locked,
+            "interval_minutes": self.config.interval_minutes,
+            "concurrency": self.config.concurrency,
+            "run_initial_cycle": self.config.run_initial_cycle,
+            "next_run_time": next_run_iso,
+            "current_cycle": {
+                "started_at": self.current_cycle_started_at,
+                "trigger": self.current_cycle_trigger,
+            } if is_locked else None,
+            "last_cycle": self.last_cycle_summary,
+        }
+
+    def trigger_cycle_in_background(self, trigger: str = "manual") -> dict:
+        if self._cycle_running.locked():
+            return {
+                "status": "already_running",
+                "message": "A scrape cycle is already in progress.",
+                "current_cycle_started_at": self.current_cycle_started_at,
+            }
+        thread = threading.Thread(
+            target=self.run_cycle,
+            kwargs={"trigger": trigger},
+            name=f"manual-scrape-cycle-{int(time.time())}",
+            daemon=True,
+        )
+        thread.start()
+        return {
+            "status": "triggered",
+            "message": f"Scrape cycle initiated with trigger '{trigger}'.",
+        }
 
     def _on_job_event(self, event) -> None:
         if event.exception:
@@ -248,7 +298,7 @@ class ScrapeSchedulerService:
                 target=self.run_cycle,
                 kwargs={"trigger": "startup"},
                 name="initial-scrape-cycle",
-                daemon=False,
+                daemon=True,
             )
             self._initial_thread.start()
 
