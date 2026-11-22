@@ -77,13 +77,11 @@ async function request<T>(path: string): Promise<T> {
   try {
     response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
   } catch {
-    throw new Error(`Cannot reach the API at ${API_URL}. Check that the backend is running and CORS allows this site.`);
+    throw new Error("Leaderboard data is currently syncing. Please try again in a moment.");
   }
 
   if (!response.ok) {
-    const body: unknown = await response.json().catch(() => null);
-    const detail = isRecord(body) && typeof body.detail === "string" ? body.detail : response.statusText;
-    throw new Error(`${response.status}: ${detail}`);
+    throw new Error("Leaderboard data is currently syncing. Please try again in a moment.");
   }
   return response.json() as Promise<T>;
 }

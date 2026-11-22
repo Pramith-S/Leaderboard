@@ -4,6 +4,8 @@ from pathlib import Path
 import logging
 import re
 import tempfile
+import threading
+import time
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -353,12 +355,13 @@ def _serialize_users(db: Session) -> list[dict]:
     course_rows = []
     for user in users:
         completions = [completion for completion in user.completions if completion.is_completed]
+        completions_by_lab = {item.lab_id: item for item in completions}
         labs = []
         for lab in labs_by_id:
             # Badge IDs are issuance IDs and differ between learners. The
             # verified association for a participant is the completion's FK
             # to this lab, not equality with the lab's canonical badge ID.
-            completion = next((item for item in completions if item.lab_id == lab.id), None)
+            completion = completions_by_lab.get(lab.id)
             labs.append({
                 "lab_name": lab.name,
                 "name": lab.name,
@@ -525,7 +528,6 @@ def _process_user(
                 started_at=started_at,
                 finished_at=finished_at,
             ))
-            _import_course_rows(db, course_rows)
         logger.info(
             "Database persistence committed for user_id=%s (badges_found=%d, new_badges_found=%d, unresolved=%d)",
             user_id,
@@ -652,11 +654,33 @@ def refresh_participant(participant_index: int):
     return _process_user(participant_index)
 
 
+_leaderboard_cache = None
+_leaderboard_cache_time = 0.0
+_leaderboard_cache_lock = threading.Lock()
+
+
 @app.get("/api/leaderboard")
 def get_full_leaderboard():
-    with SessionLocal() as db:
-        records = _serialize_users(db)
-    return get_leaderboard(records)
+    global _leaderboard_cache, _leaderboard_cache_time
+    now = time.time()
+    if _leaderboard_cache is not None and (now - _leaderboard_cache_time) < 30.0:
+        return _leaderboard_cache
+
+    with _leaderboard_cache_lock:
+        if _leaderboard_cache is not None and (now - _leaderboard_cache_time) < 30.0:
+            return _leaderboard_cache
+        try:
+            with SessionLocal() as db:
+                records = _serialize_users(db)
+            result = get_leaderboard(records)
+            _leaderboard_cache = result
+            _leaderboard_cache_time = time.time()
+            return result
+        except Exception as err:
+            if _leaderboard_cache is not None:
+                logger.warning("Error refreshing leaderboard; returning cached copy: %s", err)
+                return _leaderboard_cache
+            raise
 
 
 @app.get("/api/leaderboard/top/{limit}")

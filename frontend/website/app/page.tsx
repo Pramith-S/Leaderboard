@@ -136,11 +136,11 @@ export default function Page() {
           </section>
 
           {error && (
-            <div role="alert" className="mb-4 flex items-start gap-3 rounded-lg border border-[#E93E32] bg-[#FDECEA] p-3 text-sm text-[#9B1C12]">
-              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <div role="alert" className="mb-4 flex items-start gap-3 rounded-lg border border-line bg-panel p-3 text-sm text-ink">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-faint" aria-hidden />
               <div className="min-w-0">
-                <p className="font-semibold">Couldn&apos;t load the leaderboard</p>
-                <p className="break-words">{error}</p>
+                <p className="font-semibold">Leaderboard is syncing</p>
+                <p className="break-words text-soft">Live rankings are currently updating. Please check back in a moment.</p>
               </div>
               <button
                 type="button"
@@ -148,7 +148,7 @@ export default function Page() {
                   setLoading(true);
                   void load();
                 }}
-                className="ml-auto h-9 shrink-0 rounded-sm border border-[#9B1C12] px-3 font-medium hover:bg-[#9B1C12] hover:text-white"
+                className="ml-auto h-9 shrink-0 rounded-sm border border-line bg-white px-3 font-medium text-ink hover:bg-black/5"
               >
                 Retry
               </button>
@@ -156,11 +156,11 @@ export default function Page() {
           )}
 
           {!loading && data && backgroundError && !error && (
-            <div role="status" className="mb-4 flex items-start gap-3 rounded-lg border border-[#B45309] bg-[#FFFBEB] p-3 text-sm text-[#92400E]">
-              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <div role="status" className="mb-4 flex items-start gap-3 rounded-lg border border-line bg-panel p-3 text-sm text-soft">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-faint" aria-hidden />
               <div className="min-w-0">
-                <p className="font-semibold">Showing last successfully loaded leaderboard</p>
-                <p className="break-words">Automatic refresh failed: {backgroundError}</p>
+                <p className="font-semibold text-ink">Showing latest recorded leaderboard</p>
+                <p className="break-words">Live update in progress...</p>
               </div>
             </div>
           )}

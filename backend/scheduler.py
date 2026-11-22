@@ -48,7 +48,7 @@ CYCLE_LOCK_KEY = 731_804_161_2027
 @dataclass(frozen=True)
 class SchedulerConfig:
     interval_minutes: int = 60
-    concurrency: int = 20
+    concurrency: int = 5
     # Default true to run once immediately on startup as required, then repeat hourly.
     run_initial_cycle: bool = True
     launch_timeout_ms: int = DEFAULT_LAUNCH_TIMEOUT_MS
@@ -60,7 +60,7 @@ class SchedulerConfig:
     def from_env(cls) -> "SchedulerConfig":
         return cls(
             interval_minutes=max(1, int(os.getenv("SCRAPE_INTERVAL_MINUTES", "60"))),
-            concurrency=max(1, int(os.getenv("SCRAPE_CONCURRENCY", "20"))),
+            concurrency=max(1, int(os.getenv("SCRAPE_CONCURRENCY", "5"))),
             run_initial_cycle=os.getenv("SCRAPE_RUN_INITIAL", "true").strip().lower()
             in {"1", "true", "yes", "on"},
             launch_timeout_ms=max(1_000, int(os.getenv("SCRAPE_LAUNCH_TIMEOUT_MS", str(DEFAULT_LAUNCH_TIMEOUT_MS)))),
