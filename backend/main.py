@@ -12,7 +12,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -344,18 +344,29 @@ def _date_value(value):
 
 
 def _serialize_users(db: Session) -> list[dict]:
+    # selectinload fetches completions in one extra query instead of joining
+    # them onto every user row; badges are few and resolve from the identity map.
     users = db.scalars(select(User).options(
-        joinedload(User.completions).joinedload(Completion.badge),
-        joinedload(User.completions).joinedload(Completion.lab),
-    ).order_by(User.id)).unique().all()
+        selectinload(User.completions).selectinload(Completion.badge),
+    ).order_by(User.id)).all()
     labs_by_id = db.scalars(select(Lab).options(joinedload(Lab.badge)).order_by(Lab.id)).unique().all()
-    latest_logs = {}
-    for log in db.scalars(select(ScrapeLog).order_by(ScrapeLog.user_id, ScrapeLog.id)):
-        latest_logs[log.user_id] = log
+    # Only the newest scrape log per user is needed. The table grows by one row
+    # per user per scrape, so loading all of it gets slower every hour.
+    latest_log_ids = select(func.max(ScrapeLog.id)).group_by(ScrapeLog.user_id)
+    latest_logs = {
+        log.user_id: log
+        for log in db.scalars(select(ScrapeLog).where(ScrapeLog.id.in_(latest_log_ids)))
+    }
     course_rows = []
     for user in users:
-        completions = [completion for completion in user.completions if completion.is_completed]
-        completions_by_lab = {item.lab_id: item for item in completions}
+        # Sorted so the response is stable between requests (the relationship is unordered).
+        completions = sorted(
+            (completion for completion in user.completions if completion.is_completed),
+            key=lambda completion: completion.id,
+        )
+        completions_by_lab = {}
+        for item in completions:
+            completions_by_lab.setdefault(item.lab_id, item)
         labs = []
         for lab in labs_by_id:
             # Badge IDs are issuance IDs and differ between learners. The
@@ -587,6 +598,7 @@ async def upload_course(file: UploadFile = File(...)):
     rows = _load_course_rows(target_path)
     with SessionLocal.begin() as db:
         result = _import_course_rows(db, rows)
+    _invalidate_leaderboard_cache()
     return {"message": "Course workbook uploaded and checked.", "total_labs": len(rows),
             "imported_labs": result["imported"], "unresolved": result["unresolved"]}
 
@@ -607,6 +619,7 @@ async def upload_participants(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail=str(error)) from error
     with SessionLocal.begin() as db:
         result = _import_users(db, records)
+    _invalidate_leaderboard_cache()
     return {"message": "Participant workbook imported.", "total_participants": len(records), **result,
             "issues": result["issues"] + load_participants.last_issues}
 
@@ -640,6 +653,7 @@ def process_all_participants():
         raise HTTPException(status_code=400, detail="Import a participant workbook first.")
     course_rows = _load_course_rows()
     results = [_process_user(user_id, course_rows=course_rows) for user_id in user_ids]
+    _invalidate_leaderboard_cache()
     return {
         "message": "Participant processing completed.",
         "total_participants": len(results),
@@ -651,45 +665,60 @@ def process_all_participants():
 
 @app.post("/api/participants/{participant_index}/refresh")
 def refresh_participant(participant_index: int):
-    return _process_user(participant_index)
+    result = _process_user(participant_index)
+    _invalidate_leaderboard_cache()
+    return result
 
 
+LEADERBOARD_CACHE_SECONDS = max(0.0, float(os.getenv("LEADERBOARD_CACHE_SECONDS", "30")))
 _leaderboard_cache = None
 _leaderboard_cache_time = 0.0
 _leaderboard_cache_lock = threading.Lock()
 
 
-@app.get("/api/leaderboard")
-def get_full_leaderboard():
+def _invalidate_leaderboard_cache() -> None:
+    """Force the next leaderboard request to rebuild (after uploads or refreshes)."""
+    global _leaderboard_cache_time
+    with _leaderboard_cache_lock:
+        _leaderboard_cache_time = 0.0
+
+
+def _cached_serialized_users() -> list[dict]:
+    """Serialized participants, rebuilt at most every LEADERBOARD_CACHE_SECONDS.
+
+    Shared by the full and top-N endpoints. If a rebuild fails, the last good
+    copy is served instead of an error.
+    """
     global _leaderboard_cache, _leaderboard_cache_time
-    now = time.time()
-    if _leaderboard_cache is not None and (now - _leaderboard_cache_time) < 30.0:
+    if _leaderboard_cache is not None and (time.time() - _leaderboard_cache_time) < LEADERBOARD_CACHE_SECONDS:
         return _leaderboard_cache
 
     with _leaderboard_cache_lock:
-        if _leaderboard_cache is not None and (now - _leaderboard_cache_time) < 30.0:
+        if _leaderboard_cache is not None and (time.time() - _leaderboard_cache_time) < LEADERBOARD_CACHE_SECONDS:
             return _leaderboard_cache
         try:
             with SessionLocal() as db:
                 records = _serialize_users(db)
-            result = get_leaderboard(records)
-            _leaderboard_cache = result
-            _leaderboard_cache_time = time.time()
-            return result
         except Exception as err:
             if _leaderboard_cache is not None:
                 logger.warning("Error refreshing leaderboard; returning cached copy: %s", err)
                 return _leaderboard_cache
             raise
+        _leaderboard_cache = records
+        _leaderboard_cache_time = time.time()
+        return records
+
+
+@app.get("/api/leaderboard")
+def get_full_leaderboard():
+    return get_leaderboard(_cached_serialized_users())
 
 
 @app.get("/api/leaderboard/top/{limit}")
 def get_top_leaderboard(limit: int):
     if limit not in (10, 100, 250):
         raise HTTPException(status_code=400, detail="Limit must be 10, 100, or 250.")
-    with SessionLocal() as db:
-        records = _serialize_users(db)
-    return get_leaderboard(records, limit)
+    return get_leaderboard(_cached_serialized_users(), limit)
 
 
 # --- Automatic Background Scraping Scheduler Lifecycle & Endpoints ---

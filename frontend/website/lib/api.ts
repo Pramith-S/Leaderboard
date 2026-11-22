@@ -72,10 +72,10 @@ interface ApiLeaderboardResponse {
   leaderboard: ApiParticipant[];
 }
 
-async function request<T>(path: string): Promise<T> {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+    response = await fetch(`${API_URL}${path}`, init ?? { cache: "no-store" });
   } catch {
     throw new Error("Leaderboard data is currently syncing. Please try again in a moment.");
   }
@@ -118,11 +118,13 @@ function readLeaderboard(value: unknown): ApiLeaderboardResponse {
 }
 
 function buildBadgeCatalog(labs: ApiCourseLab[]): Badge[] {
-  return labs.map((lab) => {
+  return labs.map((lab, index) => {
     const url = lab.lab_url ?? lab.url ?? undefined;
     const name = (lab.name ?? lab.lab_name).trim();
     return {
-      key: url ?? `course:${normalizeName(name)}`,
+      // Short positional key: it is repeated on every participant row, and the
+      // lab URLs it used to hold made the server-rendered payload several times larger.
+      key: `lab-${index + 1}`,
       name,
       itemType: lab.item_type,
       credits: Number(lab.total_credits ?? lab.credits),
@@ -153,7 +155,8 @@ function participantBadges(row: ApiParticipant, catalog: Badge[]): BadgeStatus[]
       badgeKey: badge.key,
       earned,
       earnedDate: completion?.date ?? (earned ? lab?.earned_date ?? undefined : undefined),
-      url: lab?.lab_url ?? badge.url,
+      // Only carry a per-participant link when it differs from the catalogue's.
+      url: lab?.lab_url && lab.lab_url !== badge.url ? lab.lab_url : undefined,
     };
   });
 }
@@ -179,10 +182,10 @@ function buildParticipants(rows: ApiParticipant[], catalog: Badge[]): Participan
 }
 
 /** Fetch and normalize the exact response structures currently returned by FastAPI. */
-export async function fetchLeaderboardData(): Promise<LeaderboardData> {
+export async function fetchLeaderboardData(init?: RequestInit): Promise<LeaderboardData> {
   const [courseRaw, leaderboardRaw] = await Promise.all([
-    request<unknown>("/api/course"),
-    request<unknown>("/api/leaderboard"),
+    request<unknown>("/api/course", init),
+    request<unknown>("/api/leaderboard", init),
   ]);
   const course = readCourse(courseRaw);
   const leaderboard = readLeaderboard(leaderboardRaw);
