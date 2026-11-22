@@ -4,6 +4,14 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "CloudMAX Leaderboard · GDG on Campus JSSATE-B",
   description: "Live CloudMAX badge leaderboard. Track. Learn. Achieve.",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "any" },
+    ],
+    shortcut: "/icon.svg",
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = { width: "device-width", initialScale: 1 };
